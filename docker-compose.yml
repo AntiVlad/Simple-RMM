@@ -1,0 +1,23 @@
+
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: rmm_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: rmm_user
+      POSTGRES_PASSWORD: rmm_password
+      POSTGRES_DB: rmm_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - rmm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmm_user -d rmm_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  rmm_pgdata:
