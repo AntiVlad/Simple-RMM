@@ -11,7 +11,7 @@ export interface Agent {
 
 async function getAgents(): Promise<Agent[]> {
   try {
-    const res = await fetch('http://localhost:8000/api/web/agents', {
+    const res = await fetch('http://localhost:8080/api/web/agents', {
       cache: 'no-store', 
     });
     

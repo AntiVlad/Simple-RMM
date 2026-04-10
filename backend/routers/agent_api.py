@@ -25,22 +25,25 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
 
 router = APIRouter(tags=["Agent API"], dependencies=[Depends(verify_api_key)])
 
-# Pydantic schema for the task result payload
 class TaskResultPayload(BaseModel):
     status: str
     logs: Optional[str] = None
 
 @router.post("/api/agent/register", response_model=schemas.AgentResponse)
 async def register_agent(agent_data: schemas.AgentCreate, db: AsyncSession = Depends(get_db)):
-    # Check if agent already exists by hostname
     query = select(Agent).where(Agent.hostname == agent_data.hostname)
     result = await db.execute(query)
     existing_agent = result.scalar_one_or_none()
     
     if existing_agent:
+    # Update existing agent
+        existing_agent.ip_address = agent_data.ip_address
+        existing_agent.os_version = agent_data.os_version
+        existing_agent.last_seen = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(existing_agent)
         return existing_agent
         
-    # Create new agent
     new_agent = Agent(
         hostname=agent_data.hostname,
         os_version=agent_data.os_version,
@@ -62,14 +65,12 @@ async def agent_heartbeat(agent_id: uuid.UUID, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=404, detail="Agent not found")
         
     # Update last_seen timestamp
-    agent.last_seen = datetime.now(timezone.utc)  # Equivalent to utcnow() but timezone aware
+    agent.last_seen = datetime.now(timezone.utc)
     await db.commit()
     return {"status": "ok", "message": "Heartbeat recorded"}
 
 @router.get("/api/agent/{agent_id}/tasks", response_model=Optional[schemas.TaskResponseWithPackage])
 async def get_agent_tasks(agent_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    # Find the oldest pending task. 
-    # Note: Since there is no created_at, we just grab the first available PENDING task.
     query = select(Task).options(joinedload(Task.package)).where(
         Task.agent_id == agent_id,
         Task.status == TaskStatus.PENDING

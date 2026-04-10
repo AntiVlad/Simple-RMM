@@ -2,7 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-primary: #020617;
+  --bg-card: rgba(15, 23, 42, 0.5);
+  --bg-sidebar: rgba(15, 23, 42, 0.8);
+  --border-subtle: rgba(51, 65, 85, 0.5);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-indigo: #818cf8;
+  --accent-cyan: #22d3ee;
+}
+
 body {
-  background-color: #020617;
-  color: #f8fafc;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.5);
+}
+
+/* Checkbox styling */
+.checkbox-card {
+  @apply relative cursor-pointer select-none;
+}
+.checkbox-card input[type="checkbox"] {
+  @apply sr-only;
+}
+.checkbox-card input[type="checkbox"]:checked + .card-body {
+  @apply border-indigo-500/60 bg-indigo-500/10;
+}
+.checkbox-card input[type="checkbox"]:checked + .card-body .check-indicator {
+  @apply bg-indigo-500 border-indigo-500;
+}
+.checkbox-card input[type="checkbox"]:checked + .card-body .check-indicator svg {
+  @apply opacity-100;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(129, 140, 248, 0.3); }
+  50% { box-shadow: 0 0 16px rgba(129, 140, 248, 0.6); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+.animate-slideInLeft {
+  animation: slideInLeft 0.25s ease-out forwards;
 }

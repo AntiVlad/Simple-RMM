@@ -33,11 +33,15 @@ export default function VaultPage() {
   const [isDeploying, setIsDeploying] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
 
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchPackages = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/web/software");
+      const res = await fetch("http://localhost:8080/api/web/software");
       if (res.ok) setPackages(await res.json());
     } catch (err) {
       console.error("Failed to load packages");
@@ -53,6 +57,34 @@ export default function VaultPage() {
     setTimeout(() => setToast(null), 4000);
   };
 
+  const handleUpdate = async (pkgId: string) => {
+    setIsUpdating(true);
+    try {
+      const res = await fetch(`http://localhost:8080/api/web/software/${pkgId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ silent_args: editValue }),
+      });
+
+      if (res.ok) {
+        showToast("Arguments updated successfully", "success");
+        setEditingId(null);
+        fetchPackages();
+      } else {
+        showToast("Failed to update arguments", "error");
+      }
+    } catch (err) {
+      showToast("Network error", "error");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const startEditing = (pkg: SoftwarePackage) => {
+    setEditingId(pkg.id);
+    setEditValue(pkg.silent_args);
+  };
+
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault();
     if (!name || !file) return;
@@ -66,13 +98,13 @@ export default function VaultPage() {
     formData.append("file", file);
 
     try {
-      const res = await fetch("http://localhost:8000/api/web/software/upload", {
+      const res = await fetch("http://localhost:8080/api/web/software/upload", {
         method: "POST",
         body: formData,
       });
 
       if (res.ok) {
-        showToast("Software highly secured and uploaded to backend!", "success");
+        showToast("Software uploaded successfully", "success");
         setName("");
         setSilentArgs("");
         setFile(null);
@@ -98,7 +130,7 @@ export default function VaultPage() {
             Software Vault
           </h1>
           <p className="text-slate-400 text-lg">
-            Upload `.exe`, `.msi`, `.bat`, or `.ps1` payloads securely to your localized server. 
+            Upload payloads to your localized server. 
           </p>
         </header>
 
@@ -124,7 +156,7 @@ export default function VaultPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-300">Silent Arguments</label>
+                <label className="text-sm font-semibold text-slate-300">Default Silent Arguments</label>
                 <input 
                   type="text" 
                   value={silentArgs}
@@ -132,7 +164,7 @@ export default function VaultPage() {
                   placeholder="e.g. --version or /qn"
                   className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all text-slate-200"
                 />
-                <p className="text-xs text-slate-500">Optional execution flags passed to the child process natively.</p>
+                <p className="text-xs text-slate-500">Default flags used when deploying this package.</p>
               </div>
 
               <div className="space-y-2">
@@ -164,7 +196,7 @@ export default function VaultPage() {
                     : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white hover:scale-[1.02] border border-cyan-500'
                   }`}
               >
-                {isDeploying ? "Encrypting & Uploading..." : "Upload to Vault"}
+                {isDeploying ? "Uploading..." : "Upload to Vault"}
               </button>
 
             </form>
@@ -181,8 +213,8 @@ export default function VaultPage() {
                 <thead className="bg-slate-900/40 text-slate-400 text-xs uppercase tracking-wider">
                   <tr>
                     <th className="px-6 py-4 font-medium">Package Name</th>
-                    <th className="px-6 py-4 font-medium">Silent Args</th>
-                    <th className="px-6 py-4 font-medium">Internal Download URL</th>
+                    <th className="px-6 py-4 font-medium">Default Arguments</th>
+                    <th className="px-6 py-4 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 text-slate-300">
@@ -195,20 +227,57 @@ export default function VaultPage() {
                   ) : (
                     packages.map((pkg) => (
                       <tr key={pkg.id} className="hover:bg-slate-800/40 transition-colors">
-                        <td className="px-6 py-4 font-medium text-slate-200 flex items-center gap-3">
-                          <PackageIcon /> {pkg.name}
+                        <td className="px-6 py-4 font-medium text-slate-200">
+                          <div className="flex items-center gap-3">
+                            <PackageIcon /> 
+                            <div>
+                                <p>{pkg.name}</p>
+                                <p className="text-[10px] font-mono text-slate-500 truncate max-w-[150px]">{pkg.download_url}</p>
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-6 py-4 font-mono text-sm">
-                          {pkg.silent_args ? (
-                            <span className="bg-slate-950 px-2 py-1 rounded text-cyan-400 border border-slate-800">
-                              {pkg.silent_args}
-                            </span>
+                        <td className="px-6 py-4">
+                          {editingId === pkg.id ? (
+                            <div className="flex items-center gap-2 animate-in fade-in zoom-in duration-200">
+                                <input 
+                                    type="text"
+                                    value={editValue}
+                                    onChange={(e) => setEditValue(e.target.value)}
+                                    className="bg-slate-950 border border-cyan-500/50 rounded px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-cyan-500/20 w-full font-mono"
+                                    autoFocus
+                                />
+                                <button 
+                                    onClick={() => handleUpdate(pkg.id)}
+                                    disabled={isUpdating}
+                                    className="p-1 text-emerald-400 hover:bg-emerald-500/10 rounded transition-colors"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                </button>
+                                <button 
+                                    onClick={() => setEditingId(null)}
+                                    className="p-1 text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                </button>
+                            </div>
                           ) : (
-                            <span className="text-slate-600 italic">None</span>
+                            <div className="group flex items-center justify-between gap-4">
+                                <span className={`font-mono text-sm ${pkg.silent_args ? 'text-cyan-400' : 'text-slate-600 italic'}`}>
+                                    {pkg.silent_args || "No default arguments"}
+                                </span>
+                            </div>
                           )}
                         </td>
-                        <td className="px-6 py-4 font-mono text-xs text-slate-500 truncate max-w-[200px]">
-                          {pkg.download_url}
+                        <td className="px-6 py-4">
+                           {editingId !== pkg.id && (
+                                <button 
+                                    onClick={() => startEditing(pkg)}
+                                    className="p-2 text-slate-500 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-all flex items-center gap-2 text-xs font-bold"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                                    Edit Default
+                                </button>
+                           )}
                         </td>
                       </tr>
                     ))

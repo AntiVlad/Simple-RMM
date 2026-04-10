@@ -28,7 +28,6 @@ type Config struct {
 	ApiKey     string `json:"api_key"`
 }
 
-// Global runtime context
 var globalConfig *Config
 
 type RegisterRequest struct {
@@ -42,8 +41,10 @@ type RegisterResponse struct {
 }
 
 type Task struct {
-	ID      string `json:"id"`
-	Package struct {
+	ID         string `json:"id"`
+	Command    string `json:"command"`
+	CustomArgs string `json:"custom_args"`
+	Package    *struct {
 		Name        string `json:"name"`
 		DownloadURL string `json:"download_url"`
 		SilentArgs  string `json:"silent_args"`
@@ -55,9 +56,7 @@ type ResultRequest struct {
 	Logs   string `json:"logs"`
 }
 
-// -------------------------------------------------------------
-// Application Lifecycle & System Tray UI
-// -------------------------------------------------------------
+// --- Lifecycle and UI ---
 
 func main() {
 	f, err := os.OpenFile("agent.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
@@ -98,8 +97,8 @@ func onExit() {
 func startup(mStatus *systray.MenuItem) {
 	config, err := loadConfig()
 	if err != nil {
-		log.Printf("Configurations absent. Spawning initial Zenity Prompt native GUI workflows.")
-		serverUrl, err := zenity.Entry("Enter RMM Server URL / Hostname\n(e.g. http://192.168.1.100:8000 or http://myserver.local:8000):",
+		log.Printf("Configurations absent. Spawning initial setup...")
+		serverUrl, err := zenity.Entry("Enter RMM Server URL / Hostname\n(e.g. http://192.168.1.100:8080 or http://myserver.local:8080):",
 			zenity.Title("Network Configuration Setup"),
 		)
 		if err != nil || serverUrl == "" {
@@ -124,7 +123,7 @@ func startup(mStatus *systray.MenuItem) {
 
 		u, _ := url.Parse(serverUrl)
 		if u != nil && u.Port() == "" {
-			u.Host = u.Host + ":8000"
+			u.Host = u.Host + ":8080"
 			serverUrl = u.String()
 		}
 
@@ -139,12 +138,32 @@ func startup(mStatus *systray.MenuItem) {
 		}
 
 		mStatus.SetTitle("Status: Contacting Server...")
-		log.Printf("Natively caught credentials. Executing backend bridge handshakes...")
+		log.Printf("Credentials received. Connecting to server...")
 
 		id, err := registerAgent()
 		if err != nil {
-			zenity.Error(fmt.Sprintf("Failed to bridge the backend database:\n%v", err), zenity.Title("Registration Failure"))
-			systray.Quit()
+			log.Println("Failed to initially reach the server. The Agent is retreating into Background Recon mode and will connect silently when it returns.")
+			
+			go func() {
+				ticker := time.NewTicker(20 * time.Second)
+				defer ticker.Stop()
+				for range ticker.C {
+					log.Println("Attempting background registration...")
+					newId, retryErr := registerAgent()
+					if retryErr == nil {
+						log.Println("[Retry] Background registration cleanly succeeded!")
+						globalConfig.AgentID = newId
+						saveConfig(globalConfig)
+						
+						mStatus.SetTitle("Status: Online & Polling")
+						go startHeartbeat(globalConfig.AgentID)
+						go startTaskPoller(globalConfig.AgentID)
+						
+						log.Println("The RMM Server gracefully returned online and the Agent successfully bridged securely!")
+						return
+					}
+				}
+			}()
 			return
 		}
 		
@@ -154,8 +173,16 @@ func startup(mStatus *systray.MenuItem) {
 		zenity.Info("Ws in chat boys", zenity.Title("Success!"))
 
 	} else {
-		log.Printf("Configurations seamlessly retrieved for Agent: %s", config.AgentID)
+		log.Printf("Configuration retrieved for Agent: %s", config.AgentID)
 		globalConfig = config
+
+		// Re-register to ensure our ID exists in the current database
+		newId, err := registerAgent()
+		if err == nil && newId != globalConfig.AgentID {
+			log.Printf("Agent ID updated from database: %s -> %s", globalConfig.AgentID, newId)
+			globalConfig.AgentID = newId
+			saveConfig(globalConfig)
+		}
 	}
 
 	mStatus.SetTitle("Status: Online & Polling")
@@ -164,9 +191,7 @@ func startup(mStatus *systray.MenuItem) {
 	go startTaskPoller(globalConfig.AgentID)
 }
 
-// -------------------------------------------------------------
-// Network Bridge Architectures
-// -------------------------------------------------------------
+// --- Network Bridge ---
 
 func doRequest(method, endpoint string, bodyData []byte) (*http.Response, error) {
 	var req *http.Request
@@ -199,7 +224,7 @@ func loadConfig() (*Config, error) {
 		return nil, err
 	}
 	if config.AgentID == "" || config.ApiBaseURL == "" || config.ApiKey == "" {
-		return nil, fmt.Errorf("crucial dependencies randomly absent from config")
+		return nil, fmt.Errorf("crucial dependencies absent from config")
 	}
 	return &config, nil
 }
@@ -251,8 +276,7 @@ func registerAgent() (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("unexpected backend mapping rejection code %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("unexpected backend rejection code %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var regResp RegisterResponse
@@ -276,18 +300,30 @@ func sendHeartbeat(agentID string) {
 	endpoint := fmt.Sprintf("/agent/%s/heartbeat", agentID)
 	resp, err := doRequest("POST", endpoint, nil)
 	if err != nil {
-		log.Printf("[Heartbeat] Endpoint Refusal: %v", err)
+		log.Printf("[Heartbeat] Endpoint error: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusNotFound {
+		// Agent ID doesn't exist in the database (e.g. after a DB migration)
+		// Re-register to get a valid ID
+		log.Println("[Heartbeat] Agent ID not found in database. Re-registering...")
+		newId, regErr := registerAgent()
+		if regErr == nil {
+			globalConfig.AgentID = newId
+			saveConfig(globalConfig)
+			log.Printf("[Heartbeat] Re-registered successfully with new ID: %s", newId)
+		} else {
+			log.Printf("[Heartbeat] Re-registration failed: %v", regErr)
+		}
+	} else if resp.StatusCode != http.StatusOK {
 		log.Printf("[Heartbeat] Rejected Exit Code %d", resp.StatusCode)
 	}
 }
 
 func startTaskPoller(agentID string) {
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	pollForTasks(agentID)
 	for range ticker.C {
@@ -299,7 +335,7 @@ func pollForTasks(agentID string) {
 	endpoint := fmt.Sprintf("/agent/%s/tasks", agentID)
 	resp, err := doRequest("GET", endpoint, nil)
 	if err != nil {
-		log.Printf("[Poller] Pipeline Drop: %v", err)
+		log.Printf("[Poller] Pipeline error: %v", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -320,7 +356,7 @@ func pollForTasks(agentID string) {
 
 	var task Task
 	if err := json.Unmarshal(body, &task); err != nil {
-		log.Printf("[Poller] JSON mapping corruption: %v", err)
+		log.Printf("[Poller] JSON error: %v", err)
 		return
 	}
 
@@ -330,57 +366,103 @@ func pollForTasks(agentID string) {
 }
 
 func executeTask(task Task) {
-	log.Printf("[Execution Context] Pulled Sequence %s (Name: %s)", task.ID, task.Package.Name)
-	tempFile, ext, err := downloadFile(task.Package.DownloadURL)
-	if err != nil {
-		msg := fmt.Sprintf("Corrupt transit blob streaming mapping: %v", err)
-		log.Println(msg)
-		sendTaskResult(task.ID, "FAILED", msg)
-		return
-	}
-	defer os.Remove(tempFile)
+	if task.Command != "" {
+		log.Printf("[Execution Context] Pulled Remote Command %s", task.ID)
+		// Execute command on Windows
+		cmd := exec.Command("cmd.exe", "/C", task.Command)
+		output, err := cmd.CombinedOutput()
+		logs := string(output)
 
-	var cmd *exec.Cmd
-	args := strings.Fields(task.Package.SilentArgs)
-	extLower := strings.ToLower(ext)
-
-	if extLower == ".msi" {
-		cmd = exec.Command("msiexec", append([]string{"/i", tempFile, "/qn"}, args...)...)
-	} else if extLower == ".ps1" {
-		cmd = exec.Command("powershell.exe", append([]string{"-ExecutionPolicy", "Bypass", "-NoProfile", "-File", tempFile}, args...)...)
-	} else {
-		if len(args) > 0 {
-			cmd = exec.Command(tempFile, args...)
-		} else {
-			cmd = exec.Command(tempFile)
+		if err != nil {
+			msg := fmt.Sprintf("Remote Command Fatal Exit %v - Output:\n%s", err, logs)
+			log.Println(msg)
+			sendTaskResult(task.ID, "FAILED", msg)
+			return
 		}
-	}
 
-	log.Printf("[Execution Context] Subprocess Initiated. Target: %s", filepath.Base(tempFile))
-	output, err := cmd.CombinedOutput()
-	logs := string(output)
-
-	if err != nil {
-		msg := fmt.Sprintf("Child Process Fatal Exit %v - STDOUT:\n%s", err, logs)
+		msg := fmt.Sprintf("Remote Command Execution Cleanly Completed. Output:\n%s", logs)
 		log.Println(msg)
-		sendTaskResult(task.ID, "FAILED", msg)
+		sendTaskResult(task.ID, "SUCCESS", msg)
 		return
 	}
 
-	msg := fmt.Sprintf("Process Execution Cleanly Completed. STDOUT:\n%s", logs)
-	log.Println(msg)
-	sendTaskResult(task.ID, "SUCCESS", msg)
+	if task.Package != nil {
+		log.Printf("[Execution Context] Pulled Sequence %s (Name: %s)", task.ID, task.Package.Name)
+		tempFile, ext, err := downloadFile(task.Package.DownloadURL)
+		if err != nil {
+			msg := fmt.Sprintf("Download mapping error: %v", err)
+			log.Println(msg)
+			sendTaskResult(task.ID, "FAILED", msg)
+			return
+		}
+		defer os.Remove(tempFile)
+
+		var cmd *exec.Cmd
+		
+		// Use custom args if provided, otherwise fallback to package defaults
+		argsStr := task.Package.SilentArgs
+		if task.CustomArgs != "" {
+			argsStr = task.CustomArgs
+			log.Printf("[Execution Context] Using custom argument override: %s", argsStr)
+		}
+		
+		args := strings.Fields(argsStr)
+		extLower := strings.ToLower(ext)
+
+		if extLower == ".msi" {
+			cmd = exec.Command("msiexec", append([]string{"/i", tempFile, "/qn"}, args...)...)
+		} else if extLower == ".ps1" {
+			cmd = exec.Command("powershell.exe", append([]string{"-ExecutionPolicy", "Bypass", "-NoProfile", "-File", tempFile}, args...)...)
+		} else {
+			if len(args) > 0 {
+				cmd = exec.Command(tempFile, args...)
+			} else {
+				cmd = exec.Command(tempFile)
+			}
+		}
+
+		log.Printf("[Execution Context] Subprocess Initiated: %s", filepath.Base(tempFile))
+		output, err := cmd.CombinedOutput()
+		logs := string(output)
+
+		if err != nil {
+			msg := fmt.Sprintf("Child Process Fatal Exit %v - STDOUT:\n%s", err, logs)
+			log.Println(msg)
+			sendTaskResult(task.ID, "FAILED", msg)
+			return
+		}
+
+		msg := fmt.Sprintf("Process Execution Cleanly Completed. STDOUT:\n%s", logs)
+		log.Println(msg)
+		sendTaskResult(task.ID, "SUCCESS", msg)
+	}
 }
 
 func downloadFile(downloadUrl string) (string, string, error) {
 	var req *http.Request
 	var err error
 
+	// Rewrite any old hardcoded localhost URLs to use the actual server address
+	if strings.Contains(downloadUrl, "localhost") || strings.Contains(downloadUrl, "127.0.0.1") {
+		baseUrl := strings.TrimSuffix(globalConfig.ApiBaseURL, "/api")
+		downloadUrl = strings.Replace(downloadUrl, "http://localhost:8080", baseUrl, 1)
+		downloadUrl = strings.Replace(downloadUrl, "http://localhost:8000", baseUrl, 1)
+		downloadUrl = strings.Replace(downloadUrl, "http://127.0.0.1:8080", baseUrl, 1)
+		downloadUrl = strings.Replace(downloadUrl, "http://127.0.0.1:8000", baseUrl, 1)
+	}
+
+	// If the URL is relative (starts with /), resolve it against the server base URL
+	if strings.HasPrefix(downloadUrl, "/") {
+		baseUrl := strings.TrimSuffix(globalConfig.ApiBaseURL, "/api")
+		downloadUrl = baseUrl + downloadUrl
+	}
+
 	req, err = http.NewRequest("GET", downloadUrl, nil)
 	if err != nil {
 		return "", "", err
 	}
 	
+	// Always attach API key for downloads from our own server
 	if strings.Contains(downloadUrl, strings.TrimSuffix(globalConfig.ApiBaseURL, "/api")) {
 		req.Header.Set("X-API-Key", globalConfig.ApiKey)
 	}
@@ -428,18 +510,15 @@ func sendTaskResult(taskID, status, logs string) {
 	}
 	defer resp.Body.Close()
 	
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[Results Tracking] Backend Context Rejected Sequence Payload - HTTP %d", resp.StatusCode)
-	}
+		log.Printf("[Results Tracking] Backend Rejected Result - HTTP %d", resp.StatusCode)
 }
 
-// getIcon outputs a purely generated 16x16 minimal base64 physical struct to avoid external `.ico` dependencies natively 
+// getIcon outputs a minimal base64 icon
 func getIcon() []byte {
 
 	return []byte{
 		0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10, 0x00, 0x00,
 		0x01, 0x00, 0x20, 0x00, 0x68, 0x04, 0x00, 0x00, 0x16, 0x00,
 		0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
-		// Trailing zeros cleanly instruct Windows Tray parsing it securely and filling a generic blue tint natively usually.
 	}
 }
