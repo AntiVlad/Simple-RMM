@@ -276,6 +276,7 @@ func registerAgent() (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("unexpected backend rejection code %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
