@@ -11,7 +11,8 @@ export interface Agent {
 
 async function getAgents(): Promise<Agent[]> {
   try {
-    const res = await fetch('http://localhost:8080/api/web/agents', {
+    const apiUrl = process.env.INTERNAL_API_URL || 'http://localhost:8080';
+    const res = await fetch(`${apiUrl}/api/web/agents`, {
       cache: 'no-store', 
     });
     
