@@ -1,4 +1,8 @@
 
+# Root config (contains secrets)
+.env
+
+# Build artifacts
 *.exe
 *.log
 config.json
