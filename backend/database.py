@@ -5,14 +5,22 @@ from sqlalchemy.orm import declarative_base
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    # Explicitly check for backend/.env when running via the Root Go Manager executable!
-    import os
+    # Also check for backend/.env when running natively from the project root
     if os.path.exists("backend/.env"):
         load_dotenv("backend/.env")
 except Exception:
     pass
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/rmm")
+# Build DATABASE_URL from individual env vars (set by docker-compose),
+# or fall back to a full DATABASE_URL if provided directly.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    db_user = os.getenv("POSTGRES_USER", "rmm_user")
+    db_pass = os.getenv("POSTGRES_PASSWORD", "rmm_password")
+    db_host = os.getenv("DB_HOST", "localhost")
+    db_port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("POSTGRES_DB", "rmm_db")
+    DATABASE_URL = f"postgresql+asyncpg://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
